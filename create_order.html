@@ -15,8 +15,26 @@
   (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
   m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
   })(window,document,'script','//www.google-analytics.com/analytics.js','ga');
+  ga('require', 'ecommerce');
   ga('create', 'UA-73319123-1', 'auto');
   ga('send', 'pageview');
+  
+  ga('ecommerce:addTransaction', {
+  'id': '1234',                     // Transaction ID. Required.
+  'affiliation': 'vmall',   // Affiliation or store name.
+  'revenue': '11.99',               // Grand Total.
+  'shipping': '5',                  // Shipping.
+  'tax': '1.29'                     // Tax.
+});
+ga('ecommerce:addItem', {
+  'id': '1234',                     // Transaction ID. Required.
+  'name': 'mate8',    // Product name. Required.
+  'sku': 'DD23444',                 // SKU/code.
+  'category': 'mobile phone',         // Category or variation.
+  'price': '500.99',                 // Unit price.
+  'quantity': '1'                   // Quantity.
+});
+ga('ecommerce:send');
 </script>
     
   
