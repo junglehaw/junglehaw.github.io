@@ -1,2 +1,3 @@
 Google Megastore分布式存储技术全揭秘  http://www.lxway.com/861050044.htm
 GA 教程 http://www.youku.com/playlist_show/id_16830754.html
+lda中文语料 http://www.sogou.com/labs/dl/c.html
