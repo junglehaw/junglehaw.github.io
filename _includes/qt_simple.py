@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 from sklearn.preprocessing import MinMaxScaler
 import matplotlib.pyplot as plt
+import collections
 '''
 import pandas as pd
 import datetime
@@ -22,13 +23,19 @@ download_price('600519.XSHG')
 
 
 class seq_batch(object):
-    def __init__(self, data, time_steps, batch_size, target_index, lag):
+    def __init__(self, data, time_steps, batch_size, target_index, lag, backward=False):
         self.data = data
         self.time_steps = time_steps
         self.batch_size = batch_size
-        self.batch_start = 0
+        if backward:
+            self.batch_start = len(self.data) % self.time_steps
+        else:
+            self.batch_start = 0
+
         self.target_index = target_index
+        self.target_ifeats = np.logical_not(np.isin(np.arange(self.data.shape[1]),self.target_index))
         self.lag = lag
+
 
     def get_batch(self):
         # xs shape (50batch, 20steps)
@@ -41,7 +48,8 @@ class seq_batch(object):
         # returned seq, res and xs: shape (batch, step, input)
         if self.batch_start > len(self.data) - self.batch_size*self.time_steps - self.lag:
             self.batch_start = np.random.randint(0, self.time_steps, 1)
-        return [seq[:, :, 1:], res[:, :, np.newaxis], xs]
+
+        return [seq[:, :, self.target_ifeats], res, xs]
 
     def get_inference_batch(self):
         # xs shape (50batch, 20steps)
@@ -51,6 +59,11 @@ class seq_batch(object):
         self.batch_start += self.time_steps
         return [seq[:, :, 1:], res[:, :, np.newaxis], xs]
 
+    def get_feats_batch(self):
+        xs = np.arange(self.batch_start, self.batch_start + self.time_steps * self.batch_size).reshape((self.batch_size, self.time_steps))
+        seq = self.data[xs]
+        self.batch_start += self.time_steps
+        return [seq[:, :, self.target_ifeats], xs]
 
 class LSTMRegress(object):
     def __init__(self, n_steps, input_size, output_size, cell_size, batch_size):
@@ -87,6 +100,7 @@ class LSTMRegress(object):
 
     def add_cell(self):
         lstm_cell = tf.contrib.rnn.BasicLSTMCell(self.cell_size, forget_bias=1.0, state_is_tuple=True)
+        #lstm_cell = tf.nn.rnn_cell.MultiRNNCell([lstm_cell] * 2, state_is_tuple=True)
         with tf.name_scope('initial_state'):
             self.cell_init_state = lstm_cell.zero_state(self.batch_size, dtype=tf.float32)
         self.cell_outputs, self.cell_final_state = tf.nn.dynamic_rnn(
@@ -135,7 +149,11 @@ def not_suspended(row):
 def infer_show(n, save_path, session, saver, model, batcher, n_time_step=1, clf=True):
     saver.restore(session, save_path)
     for i in range(n):
-        seq, res, xs = batcher.get_inference_batch()
+        try:
+            seq, res, xs = batcher.get_inference_batch()
+        except IndexError:
+            plt.pause(30)
+
         if i == 0:
             feed_dict = {model.xs: seq, model.ys: res}
         else:
@@ -147,7 +165,39 @@ def infer_show(n, save_path, session, saver, model, batcher, n_time_step=1, clf=
 
         plt.plot(xs[0, :], res[0].flatten(), 'r', xs[0, :], pred.flatten()[0:time_steps], 'b')
         plt.draw()
-        plt.pause(20)
+        plt.pause(2)
+
+def predict_show(n, save_path, session, saver, model, batcher, clf=True):
+    saver.restore(session, save_path)
+    for i in range(n):
+        try:
+            seq, xs = batcher.get_feats_batch()
+        except IndexError:
+            p = np.max(xs) - batcher.lag
+            for j in range(pred.shape[1]):
+                a = plt.subplot(4, 1, j+1)
+                a.axvline(x=p, color='r')
+            plt.annotate(last_ts + ' +30d', xy=(p, 0))
+            plt.tight_layout()
+            plt.pause(30)
+
+        if i == 0:
+            feed_dict = {model.xs: seq, }
+        else:
+            feed_dict = {model.xs: seq, model.cell_final_state: state}
+
+        state, pred = session.run([model.cell_final_state, model.pred], feed_dict=feed_dict)
+        if clf:
+            plt.clf()
+
+        #plt.plot(xs[0, :], pred.flatten()[0:time_steps], 'b')
+        for j in range(pred.shape[1]):
+            a = plt.subplot(4, 1, j+1)
+            a.plot(xs[0, :], pred[:, j], 'b--')
+            a.set_title(mergedf.columns.values[batcher.target_index[j]])
+        plt.draw()
+    plt.pause(200)
+
 
 def train(n, save_path, session, saver, model, batcher, clf=True):
     merged = tf.summary.merge_all()
@@ -166,9 +216,13 @@ def train(n, save_path, session, saver, model, batcher, clf=True):
         if clf:
             plt.clf()
 
-        plt.plot(xs[0, :], res[0].flatten(), 'r', xs[0, :], pred.flatten()[0:time_steps], 'b')
+        #plt.plot(xs[0, :], res[0].flatten(), 'r', xs[0, :], pred.flatten()[0:time_steps], 'b')
+        for j in range(res[0].shape[1]):
+            a = plt.subplot(4, 1, j+1)
+            a.set_title(mergedf.columns.values[batcher.target_index[j]])
+            a.plot(xs[0, :], res[0, :, j], 'r', xs[0, :], pred[:, j][0:time_steps], 'b')
         plt.draw()
-        plt.pause(0.2 + i*0.01)
+        plt.pause(0.1 + i*0.005)
 
         if i % 20 == 0:
             print('cost', round(cost, 4))
@@ -180,8 +234,8 @@ def train(n, save_path, session, saver, model, batcher, clf=True):
 batch_start = 0
 time_steps = 300
 batch_size = 1
-input_size = 15
-output_size = 1
+#input_size = 15
+#output_size = 2
 cell_size = 32
 learn_rate = 0.006
 model_path = 'saver/600809'
@@ -194,45 +248,48 @@ usecols_qt = ['ts', 'open', 'total_turnover', 'volume']
 usecols_target = ['ts', 'high', 'low', 'total_turnover', 'volume']
 
 if __name__ == '__main__':
-    ftarget = '600809.XSHG.csv'
-    f600519 = '600519.XSHG.csv'
+    as_list = pd.read_csv('as_list.csv', header=None)
+    dx_list = pd.read_csv('dx_list.csv', header=None)
+    dict_as = collections.OrderedDict()
+    dict_dx = collections.OrderedDict()
+    for sname in as_list.values[:, 0]:
+        dict_as[sname] = pd.read_csv(sname + '.csv', names=feats_target, header=0, index_col='ts', usecols=usecols_target)
+    for dxname in dx_list.values[:, 0]:
+        dict_dx[dxname] = pd.read_csv(dxname + '.csv', names=col_names000, header=0, index_col='ts', usecols=usecols_qt)
 
-    f000001 = '000001.XSHG.csv'
-    f000300 = '000300.XSHG.csv'
-    f000905 = '000905.XSHG.csv'
-    f399006 = '399006.XSHE.csv'    # from 2010
+    firstkey, mergedf = dict_as.popitem(last=False)
+    while dict_as:
+        k, v = dict_as.popitem(last=False)
+        mergedf = mergedf.join(v, how='inner', rsuffix='-' + k)
+    while dict_dx:
+        k, v = dict_dx.popitem(last=False)
+        mergedf = mergedf.join(v, how='inner', rsuffix='-' + k)
 
-    df_target = pd.read_csv(ftarget, names=feats_target, header=0, index_col='ts', usecols=usecols_target)
-    df600519 = pd.read_csv(f600519, names=feats_target, header=0, index_col='ts', usecols=usecols_qt)
+    for i in range(len(mergedf.columns.values)):
+        print(i, mergedf.columns.values[i])
 
-    df000001 = pd.read_csv(f000001, names=col_names000, header=0, index_col='ts', usecols=usecols_qt)
-    df000300 = pd.read_csv(f000300, names=col_names000, header=0, index_col='ts', usecols=usecols_qt)
-    df000905 = pd.read_csv(f000905, names=col_names000, header=0, index_col='ts', usecols=usecols_qt)
-
-    merged = df_target.join(df600519, how='inner', rsuffix='600519')\
-        .join(df000001, how='inner', rsuffix='000001')\
-        .join(df000300, how='inner', rsuffix='000300')\
-        .join(df000905, how='inner', rsuffix='000905')
-
+    last_ts = np.max(mergedf.index.values)
     #raw = merged.loc[:, feats_target[1]:].values
     #filtered = raw[np.array([not_suspended(row) for row in raw])][:, [0, 2, 4, 5, 8, 14]]
-    filtered = merged.values
+    filtered = mergedf.values
 
     scaler = MinMaxScaler(feature_range=(0, 1))
     normv = scaler.fit_transform(filtered)
     plt.plot(normv)
     plt.show()
     #print(normv)
+    target_ifeat = [0, 4, 8, 12]
 
     if inference:
-        model = LSTMRegress(time_steps, input_size, output_size, cell_size, 1)
+        model = LSTMRegress(time_steps, normv.shape[1] - len(target_ifeat), len(target_ifeat), cell_size, 1)
         session = tf.Session()
         saver = tf.train.Saver()
-        inference_batcher = seq_batch(normv, time_steps, batch_size, 0, 10)
-        infer_show(200, model_path, session, saver, model, inference_batcher, clf=False)
+        inference_batcher = seq_batch(normv, time_steps, batch_size, target_ifeat, 30, backward=True)
+        #infer_show(200, model_path, session, saver, model, inference_batcher, clf=False)
+        predict_show(200, model_path, session, saver, model, inference_batcher, clf=False)
     else:
-        model = LSTMRegress(time_steps, input_size, output_size, cell_size, batch_size)
+        model = LSTMRegress(time_steps, normv.shape[1] - len(target_ifeat), len(target_ifeat), cell_size, batch_size)
         session = tf.Session()
         saver = tf.train.Saver()
-        batcher = seq_batch(normv, time_steps, batch_size, 0, 10)
-        train(400, model_path, session, saver, model, batcher, clf=False)
+        batcher = seq_batch(normv, time_steps, batch_size, target_ifeat, 30)
+        train(200, model_path, session, saver, model, batcher, clf=False)
